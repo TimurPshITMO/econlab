@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.pytest_tmp/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# тесты пакета живут в приватном репозитории (ЛР 3/student_tests): в них решения
+tests/
+
+# клон репозитория при локальном запуске ноутбука
+econlab-repo/
+
+# окружения и редакторы
+.venv/
+venv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
