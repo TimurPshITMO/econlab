@@ -318,16 +318,24 @@ class City:
         return self.request("POST", "/api/claims", json={"activity": activity, "verdict": verdict, "text": text})
 
     def claims(self) -> pd.DataFrame:
-        """Ваши заявки таблицей: activity, verdict, text, status, teacher_comment, created_at, decided_at."""
+        """Ваши заявки таблицей: activity ("fair", "festival", "radio" или "budget"), verdict, text,
+        status, teacher_comment, created_at, decided_at; у бюджетного плана ещё forecast (прогноз)."""
         return pd.DataFrame(self.request("GET", "/api/claims"))
 
-    def forecast(self, mean: float, low: float, high: float) -> dict:
-        """Прогноз итогового результата (п. 4.2): ожидаемое значение mean и диапазон [low, high].
+    def forecast(self, mean: float, low: float, high: float, text: str) -> dict:
+        """Бюджетный план (п. 4.2) — заявка в Палату (то же можно сделать на сайте стенда).
 
-        Нужно low ≤ mean ≤ high. Стенд запоминает, сколько попыток было использовано на момент
-        прогноза. Можно отправить несколько прогнозов, все они сохраняются.
+        mean — ожидаемый итоговый результат, когда все попытки будут использованы;
+        low, high — диапазон, в который итог попадёт с вероятностью не меньше 0,9; нужно low ≤ mean ≤ high;
+        text — обоснование (не короче 20 символов): какие активности и вложения вы используете дальше,
+               как посчитали ожидание и дисперсию, какие допущения сделали, как получили диапазон.
+
+        Стенд запоминает, сколько попыток было использовано в момент подачи. Заявку проверяет
+        преподаватель; за подтверждённый план город получает знак «Надёжный бюджет».
+        После срока сдачи план не принимается.
         """
-        return self.request("POST", "/api/forecast", json={"mean": mean, "low": low, "high": high})
+        return self.request("POST", "/api/claims", json={"activity": "budget", "text": text,
+                                                         "mean": mean, "low": low, "high": high})
 
     # ---------------- страна ----------------
     def country(self) -> dict:

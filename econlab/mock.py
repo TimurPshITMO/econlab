@@ -186,13 +186,12 @@ class MockCity(City):
         return [self._flat("radio", a) for a in self.attempts["radio"]]
 
     def _post_claims(self, body):
-        print("Офлайн-режим: заявка не отправлена. Текст заявки:", body)
+        if body.get("activity") == "budget" and not (body["low"] <= body["mean"] <= body["high"]):
+            raise EconError("Нужно low ≤ mean ≤ high.", status=400)
+        print("Офлайн-режим: заявка не отправлена.", body)
         return body
 
     def _get_claims(self, _):
-        return []
-
-    def _get_forecast(self, _):
         return []
 
     def _get_news(self, _):
@@ -200,7 +199,3 @@ class MockCity(City):
 
     def _get_country(self, _):
         return {"name": "Офлайн", "status": "open", "cities": []}
-
-    def _post_forecast(self, body):
-        print("Офлайн-режим: прогноз не отправлен.", body)
-        return body
