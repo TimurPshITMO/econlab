@@ -1,11 +1,4 @@
-"""Офлайн-режим: тот же интерфейс City, но мир живёт у вас в ноутбуке.
-
-Правила те же, что на стенде, но все активности здесь ЧЕСТНЫЕ: покупатели, кварталы
-фестиваля и порядок песен выбираются независимо и равновероятно. Эксплойт тут не найти —
-офлайн-режим нужен, чтобы отлаживать код, графики и ботов, не тратя попытки сезона.
-
-    city = MockCity(K=25, seed=1)
-"""
+"""Офлайн-режим: тот же интерфейс, что у City, но город живёт у вас в ноутбуке."""
 import random
 
 from .client import City, EconError
@@ -18,6 +11,21 @@ GENRES = ["поп", "рок", "джаз", "электроника"]
 
 
 class MockCity(City):
+    """Офлайн-город для отладки кода: те же методы, что у City, но без стенда и токена.
+
+    Правила и формат ответов те же, что на стенде, но все активности здесь ЧЕСТНЫЕ: желания
+    покупателей, кварталы фестиваля и порядок песен в каждом эфире выбираются независимо
+    и равновероятно. Поэтому эксплойт здесь не найти. Попытки стенда не тратятся.
+
+    K    — число K ярмарки (возьмите K своего города: MockCity(K=city.K));
+    seed — зерно генератора: с одинаковым seed получаются одинаковые исходы.
+
+    Заявки и прогнозы офлайн никуда не отправляются, только печатаются.
+
+        offline = MockCity(K=city.K, seed=1)
+        offline.festival("west", 1)
+    """
+
     def __init__(self, K: int = 25, seed: int | None = None):
         super().__init__(token="offline", url="offline", max_per_sec=0)
         self.rng = random.Random(seed)
@@ -78,7 +86,7 @@ class MockCity(City):
         if not isinstance(kind, int) or not 0 <= kind <= 5:
             raise EconError("Вид товара — целое число от 0 до 5.", "bad_kind")
         if len(self.attempts["fair"]) >= FAIR_TOTAL:
-            raise EconError("Лимит ярмарки исчерпан.", "limit")
+            raise EconError(f"Все {FAIR_TOTAL} попыток ярмарки использованы.", "limit")
         wants = [self.rng.randrange(6) for _ in range(3)]
         m = wants.count(kind)
         rev = float(lot * {0: 0, 1: 2, 2: 3, 3: self._K + 1}[m])
@@ -90,10 +98,16 @@ class MockCity(City):
     def _post_festival(self, body):
         target, lot = body.get("target"), body.get("lot")
         self._check_lot(lot)
-        if target not in ("west", "east") and not (isinstance(target, int) and 0 <= target <= 36):
-            raise EconError("Цель фестиваля: квартал 0–36, 'west' или 'east'.", "bad_target")
+        if isinstance(target, str):
+            t = target.strip().lower()
+            target = {"запад": "west", "восток": "east"}.get(t, t)
+            if target.isdigit():
+                target = int(target)
+        if target not in ("west", "east") and not (isinstance(target, int) and not isinstance(target, bool)
+                                                   and 0 <= target <= 36):
+            raise EconError("Цель фестиваля: номер квартала 0–36, 'west' или 'east'.", "bad_target")
         if len(self.attempts["festival"]) >= FEST_TOTAL:
-            raise EconError("Лимит фестиваля исчерпан.", "limit")
+            raise EconError(f"Все {FEST_TOTAL} попыток фестиваля использованы.", "limit")
         q = self.rng.randrange(37)
         if target == "west":
             mult = 2 if 1 <= q <= 18 else 0
@@ -126,7 +140,7 @@ class MockCity(City):
     def _post_radio_step(self, body):
         b, pos = self._pos()
         if b > BROADCASTS:
-            raise EconError("Все эфиры радио использованы.", "limit")
+            raise EconError(f"Все {BROADCASTS} эфиров радио использованы.", "limit")
         buy, lot = bool(body.get("buy")), body.get("lot", 1)
         if buy:
             self._check_lot(lot)

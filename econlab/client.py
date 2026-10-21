@@ -8,7 +8,26 @@ DEFAULT_URL = "https://lab-economy-im.ru"
 
 
 class EconError(Exception):
-    """Ошибка стенда: текст понятен без расшифровки (лимит, неверный ввод и т. п.)."""
+    """Ошибка, которую вернул стенд или пакет. Текст ошибки объясняет, что не так.
+
+    Атрибуты:
+        message — текст ошибки;
+        code    — короткий код или None:
+                  "limit"       — запас попыток этой активности закончился;
+                  "not_started" — стенд для вашей страны ещё не открыт;
+                  "closed"      — срок сдачи прошёл, попытки закрыты;
+                  "bad_lot"     — вложение не целое число от 1 до 5;
+                  "bad_kind"    — вид товара ярмарки не от 0 до 5;
+                  "bad_target"  — неверная цель фестиваля;
+                  "in_progress" — эфир радио уже начат (доиграйте его через radio_step);
+        status  — HTTP-код ответа стенда (400 — неверный ввод или правила игры, 401 — токен не найден)
+                  или None, если до стенда не удалось достучаться.
+
+        try:
+            city.festival("west", 1)
+        except EconError as e:
+            print(e.code, e.message)
+    """
 
     def __init__(self, message, code=None, status=None):
         super().__init__(message)
@@ -18,12 +37,21 @@ class EconError(Exception):
 class City:
     """Ваш город на стенде.
 
-        city = City(token="...")   # по умолчанию стенд https://lab-economy-im.ru
-        city.status()                       # день, склад, сверхприбыль, остаток лимитов
-        city.fair(kind=3, lot=1)            # ярмарка
-        city.festival(target="west", lot=1) # фестиваль: квартал 0–36, "west" или "east"
-        city.radio_step(buy=False)          # радио: решение по следующей песне
-        city.history("festival")            # история в виде таблицы pandas
+        city = City(TOKEN)                       # стенд https://lab-economy-im.ru
+        city.status()                            # срок, результат, сколько попыток использовано
+        city.fair(kind=3, lot=1)                 # попытка на ярмарке
+        city.festival(target="west", lot=1)      # попытка на фестивале
+        city.play_broadcast(decide, lot=5)       # эфир радио по вашему правилу
+        city.history("festival")                 # история попыток таблицей pandas
+
+    Аргументы:
+        token       — токен команды (выдаёт преподаватель);
+        url         — адрес стенда, по умолчанию https://lab-economy-im.ru;
+        max_per_sec — не больше стольких запросов в секунду. Если стенд всё же ответит
+                      «слишком много запросов», пакет сам подождёт и повторит запрос;
+        verbose     — True: печатать ответ стенда на каждую попытку.
+
+    Подробности о любом методе: help(city.fair), help(City.play_broadcast) и т. д.
     """
 
     def __init__(self, token: str, url: str = DEFAULT_URL, session=None, max_per_sec: float = 20.0,
@@ -38,6 +66,7 @@ class City:
 
     # ---------------- низкий уровень ----------------
     def request(self, method: str, path: str, json=None, params=None):
+        """Запрос к API стенда (служебный метод, обычно не нужен). Возвращает разобранный JSON."""
         for attempt in range(30):
             gap = self._min_gap - (time.monotonic() - self._last)
             if gap > 0:
@@ -70,17 +99,32 @@ class City:
 
     # ---------------- город ----------------
     def me(self) -> dict:
-        """Полная карточка города (словарь)."""
+        """Полная карточка города (словарь).
+
+        Ключи:
+            "city"    — название, команда, герб;
+            "country" — страна: "name", "status" ("not_started" / "open" / "closed"),
+                        "start_at", "deadline_at" (время московское);
+            "rules"   — "fair_K", "lot_min", "lot_max", "fair_total", "festival_total",
+                        "radio_broadcasts", "radio_songs";
+            "stats"   — "overprofit" (результат города), "invested", "revenue",
+                        "by_activity" (то же по каждой активности), "usage" (сколько попыток
+                        использовано), "limits" (сколько осталось), "tier" (ступень города);
+            "rewards" — достопримечательности города.
+        """
         return self.request("GET", "/api/me")
 
     def status(self) -> dict:
-        """Коротко: срок, результат, сколько попыток использовано."""
+        """Коротко о городе: срок сдачи, результат, ступень, сколько попыток использовано, K ярмарки.
+
+        Результат — вся выручка минус всё вложенное (0 — то же, что продать весь товар на рынке).
+        """
         m = self.me()
         st, u = m["stats"], m["stats"]["usage"]
         out = {
             "город": m["city"]["label"], "страна": m["country"]["name"],
             "срок сдачи": m["country"]["deadline_at"],
-            "результат (сверхприбыль)": st["overprofit"], "ступень": st["tier"]["name"],
+            "результат": st["overprofit"], "ступень": st["tier"]["name"],
             "ярмарка": f'{u["fair"]["used"]} из {u["fair"]["total"]} попыток',
             "фестиваль": f'{u["festival"]["used"]} из {u["festival"]["total"]} попыток',
             "радио": f'{u["radio"]["broadcasts_used"]} из {u["radio"]["broadcasts_total"]} эфиров',
@@ -94,54 +138,133 @@ class City:
 
     @property
     def K(self) -> int:
-        """Бонус ярмарки за три совпадения в вашем городе."""
+        """Число K ярмарки вашего города: при трёх совпадениях выручка (K + 1)·s."""
         return self.me()["rules"]["fair_K"]
 
     def rename(self, name: str = None, coat: dict = None) -> dict:
-        """Название и герб: coat = {"shape": "heater", "figure": "tower", "color": "#7a1f5c", "motto": "..."}"""
+        """Название и герб города (то же можно сделать на сайте стенда).
+
+        name — от 2 до 40 символов;
+        coat — {"shape": форма щита, "figure": фигура, "color": "#RRGGBB", "motto": девиз до 60 символов}.
+               Формы: "heater", "round", "french", "banner".
+               Фигуры: "tower", "wave", "star", "key", "sun", "tree", "anchor", "bird", "bell", "dice".
+        Возвращает карточку города, как me().
+        """
         return self.request("PATCH", "/api/city", json={"name": name, "coat": coat})
 
     # ---------------- активности ----------------
     def fair(self, kind: int, lot: int = 1) -> dict:
-        """Ярмарка: вид товара 0–5, вложение 1–5 ящиков.
-        Возвращает желания покупателей, число совпадений и выручку."""
+        """Попытка на ярмарке.
+
+        kind — вид товара, целое от 0 до 5;
+        lot  — вложение s, целое от 1 до 5 ящиков.
+
+        Возвращает словарь:
+            "idx"      — номер попытки ярмарки (с 0);
+            "choice"   — {"kind", "lot"};
+            "outcome"  — {"wants": [вид товара каждого из трёх покупателей], "matches": число совпадений};
+            "invested" — вложено ящиков; "revenue" — выручка; "profit" — revenue − invested.
+
+            r = city.fair(kind=0, lot=1)
+            r["outcome"]["matches"], r["revenue"]
+        """
         return self._log(self.request("POST", "/api/fair", json={"kind": kind, "lot": lot}))
 
     def festival(self, target, lot: int = 1) -> dict:
-        """Фестиваль: target — квартал 0–36, "west" (1–18) или "east" (19–36)."""
+        """Попытка на фестивале.
+
+        target — куда поставить фургон: номер квартала 0–36 (выручка 36·s, если сцена там),
+                 "west" — кварталы 1–18 или "east" — кварталы 19–36 (выручка 2·s, если сцена в этой половине);
+        lot    — вложение s, целое от 1 до 5 ящиков.
+
+        Возвращает словарь:
+            "idx"      — номер попытки фестиваля (с 0);
+            "choice"   — {"target", "lot"};
+            "outcome"  — {"quarter": квартал, где была сцена, "mult": выручка на ящик};
+            "invested", "revenue", "profit" — как у fair().
+
+            r = city.festival("west", 1)
+            r["outcome"]["quarter"]
+        """
         return self._log(self.request("POST", "/api/festival", json={"target": target, "lot": lot}))
 
     # ---------------- радио ----------------
     def radio_state(self) -> dict:
-        """Номер эфира и позиция следующей песни, m, предыдущий эфир, каталог песен."""
+        """Состояние радио перед следующим решением.
+
+        Ключи:
+            "broadcast"   — номер текущего эфира (с 1); "broadcasts_total" — сколько эфиров всего;
+            "position"    — номер следующей песни в эфире (с 0); 0 — эфир ещё не начат;
+            "can_play"    — можно ли сейчас слушать (эфиры не кончились и стенд открыт);
+            "finished"    — все эфиры использованы;
+            "next_m"      — m перед следующим решением: средняя аудитория ещё не прозвучавших песен;
+            "played"      — id песен, уже прозвучавших в текущем эфире, по порядку;
+            "previous"    — порядок песен (id) в предыдущем эфире;
+            "catalog"     — каталог песен (список словарей, удобнее — catalog()).
+        """
         return self.request("GET", "/api/radio/state")
 
     def radio_step(self, buy: bool, lot: int = 1) -> dict:
-        """Решение по следующей песне: купить паузу после неё (buy=True) или нет."""
+        """Одно решение на радио: покупать ли рекламную паузу после СЛЕДУЮЩЕЙ песни.
+
+        Какая песня будет следующей, заранее не видно. Обычно удобнее play_broadcast().
+
+        buy — True: купить паузу; False: не покупать (ничего не вкладывается, выручка 0);
+        lot — вложение s при покупке, целое от 1 до 5.
+
+        Возвращает словарь:
+            "choice"  — {"buy", "lot"} (при buy=False lot = 0);
+            "outcome" — {"broadcast", "pos": номер песни в эфире, "song": id прозвучавшей песни,
+                         "level": её аудитория v, "m": m в момент решения};
+            "invested", "revenue" (= 0,95·s·v/m при покупке), "profit".
+        """
         return self._log(self.request("POST", "/api/radio/step", json={"buy": bool(buy), "lot": lot}))
 
     def radio_log(self, broadcast: int) -> list:
-        """Эфирная справка: порядок песен (их id) в эфире broadcast. Эфир 0 — исходный порядок до начала."""
+        """Эфирная справка: порядок песен (список id) в эфире с номером broadcast.
+
+        Эфир 0 — исходный порядок до первого эфира. Для текущего эфира — только уже прозвучавшие песни.
+        """
         return self.request("GET", "/api/radio/log", params={"broadcast": broadcast})["playlist"]
 
     def radio_logs(self) -> dict:
-        """Все прошедшие эфиры: {номер эфира: [id песен]}."""
+        """Все полностью прозвучавшие эфиры (и эфир 0): словарь {номер эфира: [id песен по порядку]}.
+
+            logs = city.radio_logs()
+            logs[3]          # порядок песен в эфире 3
+        """
         st = self.radio_state()
         last = st["broadcast"] if st["finished"] else st["broadcast"] - 1
         return {b: self.radio_log(b) for b in range(last + 1)}
 
     def catalog(self) -> pd.DataFrame:
-        """Каталог песен: id, название, исполнитель, жанр, уровень популярности (аудитория)."""
+        """Каталог песен — таблица с индексом id и столбцами
+        "title" (название), "artist" (исполнитель), "genre" (жанр), "level" (аудитория v, от 1 до 9).
+
+            cat = city.catalog()
+            cat.loc[5, "level"]      # аудитория песни с id 5
+        """
         return pd.DataFrame(self.radio_state()["catalog"]).set_index("id")
 
     def play_broadcast(self, decide, lot: int = 5) -> pd.DataFrame:
-        """Проиграть один эфир целиком (36 песен).
+        """Проиграть один эфир целиком: 36 решений подряд по вашему правилу decide.
 
-        decide(played, previous, catalog, m) -> bool  — покупать ли паузу после СЛЕДУЮЩЕЙ песни.
-          played   — id песен, уже прозвучавших в этом эфире (по порядку);
-          previous — предыдущий эфир (список id);
-          catalog  — таблица песен (см. catalog());
-          m        — средняя аудитория ещё не прозвучавших в этом эфире песен.
+        decide(played, previous, catalog, m) -> bool вызывается перед каждой песней и решает,
+        покупать ли паузу после СЛЕДУЮЩЕЙ песни:
+            played   — список id песен, уже прозвучавших в этом эфире, по порядку (в начале эфира пустой);
+            previous — порядок песен (id) в предыдущем эфире;
+            catalog  — каталог песен, как catalog();
+            m        — средняя аудитория ещё не прозвучавших в этом эфире песен.
+        lot — вложение при каждой покупке, от 1 до 5.
+
+        Эфир должен быть не начат: если его уже начали через radio_step, доиграйте его там же.
+
+        Возвращает таблицу из 36 строк со столбцами
+            "broadcast", "pos", "song", "level", "m", "buy", "lot", "revenue".
+
+            def never(played, previous, catalog, m):
+                return False
+            b = city.play_broadcast(never)
         """
         st = self.radio_state()
         if not st["can_play"]:
@@ -164,36 +287,55 @@ class City:
 
     # ---------------- история ----------------
     def history(self, activity: str) -> pd.DataFrame:
-        """Ваша история попыток: activity = "fair", "festival" или "radio"."""
+        """Все ваши попытки одной активности — таблица pandas, по строке на попытку, по порядку.
+
+        activity — "fair", "festival" или "radio". Столбцы:
+            fair:     idx, kind (вид товара), lot, want1, want2, want3 (желания покупателей),
+                      matches (число совпадений), revenue;
+            festival: idx, target (квартал, "west" или "east"), lot, quarter (квартал сцены), revenue;
+            radio:    idx, broadcast, pos (номер песни в эфире), buy (1 — пауза куплена), lot,
+                      song (id песни), level (её аудитория), m, revenue.
+
+            fest = city.history("festival")
+            xs = fest["quarter"].tolist()
+        """
         data = self.request("GET", f"/api/history/{activity}")
         return pd.DataFrame(data)
 
     # ---------------- Палата и прогноз ----------------
     def claim(self, activity: str, verdict: str, text: str) -> dict:
-        """Заявка в Экономическую палату.
+        """Заявка в Экономическую палату (то же можно сделать на сайте стенда).
 
         activity — "fair", "festival" или "radio";
         verdict  — "exploit" (эксплойт есть) или "fair" (активность честная);
-        text     — что вы нашли: как собирали данные, какие числа получили, почему уверены.
+        text     — что вы нашли: как собирали данные, какие числа получили, почему уверены
+                   (не короче 20 символов).
+
+        По одной активности может быть только одна заявка на проверке. Отклонённую заявку
+        можно исправить и подать снова. Возвращает заявку: "id", "status" ("pending" — на проверке,
+        "approved", "rejected"), "teacher_comment" и др.
         """
         return self.request("POST", "/api/claims", json={"activity": activity, "verdict": verdict, "text": text})
 
     def claims(self) -> pd.DataFrame:
-        """Ваши заявки и их статусы."""
+        """Ваши заявки таблицей: activity, verdict, text, status, teacher_comment, created_at, decided_at."""
         return pd.DataFrame(self.request("GET", "/api/claims"))
 
     def forecast(self, mean: float, low: float, high: float) -> dict:
-        """Прогноз итогового результата и диапазон [low, high], в который он попадёт с вероятностью 0,9
-        (по нормальному приближению, как в теореме Муавра–Лапласа)."""
+        """Прогноз итогового результата (п. 4.2): ожидаемое значение mean и диапазон [low, high].
+
+        Нужно low ≤ mean ≤ high. Стенд запоминает, сколько попыток было использовано на момент
+        прогноза. Можно отправить несколько прогнозов, все они сохраняются.
+        """
         return self.request("POST", "/api/forecast", json={"mean": mean, "low": low, "high": high})
 
     # ---------------- страна ----------------
     def country(self) -> dict:
-        """Карта страны: города, их ступени, столица, достопримечательности."""
+        """Карта страны: "cities" — города с их ступенями и достопримечательностями, столица и др."""
         return self.request("GET", "/api/country")
 
     def news(self, limit: int = 20) -> list:
-        """Лента новостей страны."""
+        """Последние limit новостей страны: список словарей с ключами "text", "created_at" и др."""
         return self.request("GET", "/api/news", params={"limit": limit})
 
     # ---------------- служебное ----------------

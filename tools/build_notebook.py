@@ -1,14 +1,14 @@
-"""Сборка ноутбука notebooks/lab3.ipynb из ячеек ниже.
+"""Сборка ноутбука notebooks/lab2.ipynb из ячеек ниже.
 
     python tools/build_notebook.py
 
-Разделы и номера пунктов совпадают с текстом задания (Задание/lab3.tex).
-Перед выдачей студентам впишите REPO_URL в ячейку подключения.
+Разделы и номера пунктов совпадают с текстом задания.
 """
 import json
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parents[1] / "notebooks" / "lab3.ipynb"
+OUT = Path(__file__).resolve().parents[1] / "notebooks" / "lab2.ipynb"
+README = "https://github.com/TimurPshITMO/econlab#readme"
 cells = []
 
 
@@ -23,7 +23,7 @@ def code(text):
 
 # =====================================================================
 md("""
-# Лабораторная работа №3 — рабочий ноутбук
+# Лабораторная работа №2 — рабочий ноутбук
 
 Перед началом сохраните копию: **Файл → Сохранить копию на Диске** — и работайте в ней.
 
@@ -45,7 +45,7 @@ md("""
 
 code("""
 REPO_URL = "https://github.com/TimurPshITMO/econlab.git"   # репозиторий курса
-SERVER_URL = "https://lab-economy-im.ru"                      # стенд
+SERVER_URL = "https://lab-economy-im.ru"                    # стенд
 
 import os, sys
 if not os.path.exists("econlab-repo"):
@@ -57,7 +57,8 @@ sys.path.insert(0, "econlab-repo")
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from econlab import City, MockCity, EconError, stats, plots, simulate_neighbors
+from scipy import stats as st          # распределения: st.binom, st.poisson, st.norm
+from econlab import City, MockCity, EconError
 """)
 
 md("""
@@ -77,9 +78,37 @@ city = City(TOKEN, url=SERVER_URL)
 city.status()
 """)
 
+md(f"""
+### Шпаргалка по `econlab`
+
+| Вызов | Что делает | Что возвращает |
+| --- | --- | --- |
+| `city.status()` | коротко о городе | срок сдачи, результат, ступень, сколько попыток использовано, K |
+| `city.K` | число K ярмарки вашего города | целое число |
+| `city.fair(kind, lot)` | попытка на ярмарке: вид товара 0–5, вложение 1–5 | словарь; `["outcome"]["matches"]` — число совпадений, `["revenue"]` — выручка |
+| `city.festival(target, lot)` | попытка на фестивале: квартал 0–36, `"west"` (1–18) или `"east"` (19–36) | словарь; `["outcome"]["quarter"]` — квартал сцены, `["revenue"]` — выручка |
+| `city.catalog()` | каталог песен радио | таблица: индекс `id`, столбцы `title`, `artist`, `genre`, `level` (аудитория) |
+| `city.play_broadcast(decide, lot)` | эфир радио целиком по вашему правилу `decide` | таблица из 36 строк: `song`, `level`, `m`, `buy`, `lot`, `revenue`, … |
+| `city.radio_logs()` | порядок песен во всех прошедших эфирах | словарь `{{номер эфира: [id песен]}}`, эфир 0 — исходный порядок |
+| `city.radio_state()` | состояние радио | словарь: номер эфира, `next_m`, `previous` (предыдущий эфир), … |
+| `city.history(activity)` | все ваши попытки: `"fair"`, `"festival"` или `"radio"` | таблица pandas, столбцы ниже |
+| `city.claim(activity, verdict, text)` | заявка в Палату | заявка со статусом |
+| `city.claims()` | ваши заявки | таблица |
+| `city.forecast(mean, low, high)` | прогноз итогового результата (п. 4.2) | сохранённый прогноз |
+
+Столбцы `city.history(...)`:
+- `"fair"`: `idx`, `kind`, `lot`, `want1`, `want2`, `want3` (желания покупателей), `matches`, `revenue`;
+- `"festival"`: `idx`, `target`, `lot`, `quarter` (квартал сцены), `revenue`;
+- `"radio"`: `idx`, `broadcast`, `pos` (номер песни в эфире), `buy` (1 — пауза куплена), `lot`, `song`, `level`, `m`, `revenue`.
+
+Ошибки стенда (закончился запас, неверное вложение, стенд закрыт) приходят как исключение `EconError`
+с понятным текстом. Подробное описание любого метода: `help(city.fair)`, `help(City.play_broadcast)`.
+Полный справочник — в [README репозитория]({README}).
+""")
+
 md("""
-Отлаживать код удобно в **офлайн-режиме**: `MockCity` повторяет правила стенда, но все активности в нём
-честные, а попытки не тратятся. Эксплойт в офлайн-режиме не найти.
+Отлаживать код удобно в **офлайн-режиме**: `MockCity` повторяет правила и ответы стенда, но все активности
+в нём честные, а попытки стенда не тратятся. Эксплойт в офлайн-режиме не найти.
 """)
 
 code("""
@@ -92,7 +121,6 @@ md("""
 ## 1. Экономический расчёт
 
 Пункты 1.1–1.6 решаются на бумаге. Ячейки ниже помогают проверить ответы численно.
-Число $K$ вашего города — `city.K`.
 """)
 
 code("""
@@ -111,25 +139,27 @@ def fair_DR(K):
 fair_ER(K), fair_DR(K)
 """)
 
-md("Проверка формул симуляцией: миллион попыток «на бумаге», без стенда.")
+md("Проверка формул моделированием: миллион попыток «на бумаге», без стенда.")
 
 code("""
 rng = np.random.default_rng(0)
-matches = (rng.integers(0, 6, size=(1_000_000, 3)) == 0).sum(axis=1)
-R = np.choose(matches, [0, 2, 3, K + 1])
+matches = (rng.integers(0, 6, size=(1_000_000, 3)) == 0).sum(axis=1)   # совпадения с видом товара 0
+R = np.choose(matches, [0, 2, 3, K + 1])                                # выручка на 1 ящик
 print("E R ≈", R.mean(), "  D R ≈", R.var())
 """)
 
 code("""
-# 1.3: число попыток n, при котором суммарный результат на ярмарке положителен с вероятностью ≥ 0.95,
-#      по неравенству Чебышёва и по теореме Муавра–Лапласа;
-#      вероятность отрицательного результата, если потратить все 600 попыток.
+# 1.3: число попыток n по неравенству Чебышёва
+# TODO
+
+# 1.3: моделированием оцените вероятность закончить с отрицательным результатом,
+#      если потратить на ярмарку все 600 попыток с вложением 1 (например, 10 000 прогонов)
 # TODO
 """)
 
 code("""
-# 1.4: число «трёх совпадений» за 600 попыток — биномиальное распределение и приближение Пуассона;
-#      вероятность ни разу не увидеть «три совпадения».
+# 1.4: число «трёх совпадений» за 600 попыток: биномиальное распределение и приближение Пуассона
+# Пригодятся st.binom.pmf(k, n, p) и st.poisson.pmf(k, lam)
 # TODO
 """)
 
@@ -137,9 +167,7 @@ code("""
 md("""
 ## 2. Как перемешивает радио: эксперимент с колодой
 
-**2.2.** Для каждой серии упорядочьте колоду, сделайте $k = 1, 2, 3, 4$ тасовки врезкой и после каждой
-посчитайте число **сохранённых соседств** $S_k$. Впишите результаты: один список на каждое $k$,
-одно число на серию.
+**2.2.** Впишите результаты эксперимента: для каждого $k$ — список значений $S_k$, по одному на серию.
 """)
 
 code("""
@@ -153,15 +181,45 @@ pd.DataFrame({k: pd.Series(v) for k, v in S_hands.items()}).describe()
 """)
 
 md("""
-**2.4.** Модель тасовки врезкой (модель Гилберта–Шеннона–Ридса):
-1. число карт в верхней части разреза ~ Bin(n, 1/2);
-2. пока в обеих частях есть карты, следующая карта падает из части, где осталось $a$ карт,
-   с вероятностью $a/(a+b)$; порядок карт внутри частей сохраняется.
+Готовые функции: подсчёт сохранённых соседств и прогон модели тасовки.
 """)
 
 code("""
 import random
 
+
+def neighbors_kept(before, after):
+    \"\"\"Сколько соседств «a, сразу за ней b» из порядка before сохранилось в порядке after.\"\"\"
+    nxt = {before[i]: before[i + 1] for i in range(len(before) - 1)}
+    return sum(1 for i in range(len(after) - 1) if nxt.get(after[i]) == after[i + 1])
+
+
+def simulate_neighbors(riffle, k, n_cards=36, trials=2000, seed=0):
+    \"\"\"S_k в trials повторах: упорядоченная колода, k тасовок функцией riffle(deck, rng).\"\"\"
+    rng = random.Random(seed)
+    out = []
+    for _ in range(trials):
+        start = list(range(n_cards))
+        deck = start
+        for _ in range(k):
+            deck = riffle(deck, rng)
+            if not isinstance(deck, list) or sorted(deck) != start:
+                raise ValueError("riffle должна вернуть список — ту же колоду в новом порядке.")
+        out.append(neighbors_kept(start, deck))
+    return out
+""")
+
+md("""
+**2.4.** Модель тасовки врезкой (модель Гилберта–Шеннона–Ридса):
+1. число карт в верхней части разреза ~ Bin(n, 1/2);
+2. пока в обеих частях есть карты, следующая карта падает из части, где осталось $a$ карт,
+   с вероятностью $a/(a+b)$ ($b$ — сколько осталось в другой части); порядок карт внутри частей сохраняется.
+
+Функция `riffle(deck, rng)` получает колоду (список) и генератор `random.Random`;
+случайные числа берите из него: `rng.random()`, `rng.randint(a, b)`.
+""")
+
+code("""
 def riffle(deck, rng):
     # TODO (2.4): одна тасовка врезкой; верните новый список
     ...
@@ -172,14 +230,17 @@ pd.DataFrame({k: [np.mean(v), np.var(v, ddof=1)] for k, v in model.items()},
 """)
 
 code("""
-# 2.5: руки / модель / идеально перемешанная колода (идеал — ответ п. 2.3)
+# 2.5: руки, модель и идеально перемешанная колода (идеал — ответ п. 2.3)
 ks = list(range(1, 8))
-hands_k = [k for k in S_hands if len(S_hands[k]) > 1]
-hands_mean = [np.mean(S_hands[k]) for k in hands_k]
-hands_err = [1.96 * np.std(S_hands[k], ddof=1) / np.sqrt(len(S_hands[k])) for k in hands_k]
-ideal = 35 / 36
-plots.shuffle_comparison(ks, hands_mean, hands_err, [np.mean(model[k]) for k in ks], ideal)
+hands_k = [k for k in S_hands if S_hands[k]]
+plt.plot(ks, [np.mean(model[k]) for k in ks], "s--", label="модель")
+plt.plot(hands_k, [np.mean(S_hands[k]) for k in hands_k], "o", label="руки")
+plt.axhline(35 / 36, color="k", ls=":", label="идеальное перемешивание")
+plt.xlabel("число тасовок k"); plt.ylabel("сохранённые соседства, среднее"); plt.legend()
 plt.show()
+
+# TODO (2.5): с помощью модели оцените, насколько может отличаться от E S_k среднее
+#             по стольким сериям, сколько провели вы
 """)
 
 # =====================================================================
@@ -188,7 +249,7 @@ md("""
 
 ### Фестиваль
 
-**3.1.** Соберите не меньше 300 наблюдений. Дешевле всего ставить фургон на половину улицы с вложением 1.
+**3.1.** Соберите не меньше 300 наблюдений.
 """)
 
 code("""
@@ -205,28 +266,34 @@ len(xs)
 """)
 
 code("""
-# 3.2: кварталы выпадают равновероятно?
-plots.quarter_frequencies(xs)
+# 3.2: частоты кварталов
+freq = pd.Series(xs).value_counts().reindex(range(37), fill_value=0) / len(xs)
+plt.bar(freq.index, freq.values)
+plt.axhline(1 / 37, color="k", ls="--", label="1/37")
+plt.xlabel("квартал"); plt.ylabel("частота"); plt.legend()
+plt.show()
+
+# TODO (3.2)
+""")
+
+code("""
+# 3.3: пары соседних попыток (X, Y) и их корреляция
+pairs = pd.DataFrame({"X": xs[:-1], "Y": xs[1:]})
+print("corr(X, Y) =", round(np.corrcoef(pairs.X, pairs.Y)[0, 1], 4))
+plt.scatter(pairs.X, pairs.Y, s=8, alpha=.5)
+plt.xlabel("X (попытка i)"); plt.ylabel("Y (попытка i + 1)"); plt.gca().set_aspect("equal")
 plt.show()
 """)
 
 code("""
-# 3.3: корреляция номеров кварталов в соседних попытках
-p = stats.pairs(xs)
-print("corr(X, Y) =", round(np.corrcoef(p.X, p.Y)[0, 1], 4))
-plots.neighbor_scatter(xs)
-plt.show()
+# 3.4: таблица переходов — сколько раз за кварталом x шёл квартал y
+transitions = pd.crosstab(pairs.X, pairs.Y).reindex(index=range(37), columns=range(37), fill_value=0)
+
+# TODO (3.4)
 """)
 
 code("""
-# 3.4: проверка независимости своим способом (п. 1.6) и оценка по Муавру–Лапласу.
-# Пригодятся: stats.transition_table(xs, normalize=True), plots.transition_heatmap(xs),
-#             stats.freq_range(k, n), stats.z_score(p_hat, p0, n)
-# TODO
-""")
-
-code("""
-# 3.5: стратегия и оценка математического ожидания выручки на ящик при ней
+# 3.5
 # TODO
 """)
 
@@ -257,13 +324,20 @@ sorted(logs)
 """)
 
 code("""
-# 3.6–3.7: сколько соседств предыдущего эфира сохраняется в следующем; сравните с этапом 2
-kept = [stats.neighbors_kept(logs[b - 1], logs[b]) for b in sorted(logs) if b >= 1]
+# 3.6: сколько соседств предыдущего эфира сохраняется в следующем
+kept = [neighbors_kept(logs[b - 1], logs[b]) for b in sorted(logs) if b >= 1]
 kept, np.mean(kept)
+
+# TODO (3.7)
 """)
 
 code("""
-# 3.8–3.9: правило покупки паузы. Вернуть True — купить паузу после СЛЕДУЮЩЕЙ песни.
+# 3.8
+# TODO
+""")
+
+code("""
+# 3.9: правило покупки паузы. Вернуть True — купить паузу после СЛЕДУЮЩЕЙ песни.
 #   played   — песни, уже прозвучавшие в этом эфире;   previous — предыдущий эфир;
 #   catalog  — таблица песен (catalog.loc[id, "level"]); m — средняя аудитория ещё не прозвучавших песен.
 def decide(played, previous, catalog, m):
@@ -275,11 +349,13 @@ b[b.buy]
 """)
 
 code("""
-# Средняя выручка на ящик по купленным паузам и её разброс по Муавру–Лапласу
+# 3.9: выручка на ящик по купленным паузам
 radio = city.history("radio")
 bought = radio[radio.buy == 1]
 r = bought.revenue / bought.lot
-stats.mean_range(r) if len(r) > 1 else "пока нет покупок"
+print("покупок:", len(r), "  средняя выручка на ящик:", r.mean() if len(r) else "—")
+
+# TODO (3.9)
 """)
 
 md("""
@@ -301,16 +377,12 @@ city.claims()
 md("""
 ## 4. Бюджетный план
 
-**4.2.** Ожидаемый итоговый результат и диапазон, в который он попадёт с вероятностью 0,9
-(по нормальному приближению, как в теореме Муавра–Лапласа). Если вклады попыток независимы,
-их ожидания и дисперсии складываются: `stats.normal_interval(mean, var, 0.9)`.
-Отправьте прогноз **до** того, как тратить оставшиеся попытки.
+**4.2.** Отправьте прогноз **до** того, как тратить оставшиеся попытки.
 """)
 
 code("""
 # TODO (4.2)
-# mean, var = ..., ...
-# low, high = stats.normal_interval(mean, var, 0.9)
+# mean, low, high = ...
 # city.forecast(mean, low, high)
 city.status()
 """)
@@ -338,12 +410,15 @@ def spend_the_rest(fest_lot=1, radio_lot=5):
 """)
 
 code("""
-# 4.4: средняя выручка на ящик по числу попыток — честный способ игры против вашей стратегии
+# 4.4: средняя выручка на ящик по первым n попыткам — честный способ игры и ваша стратегия
 fest = city.history("festival")
 ret = fest.revenue / fest.lot
-honest = ret[fest.target.isin(["west", "east"])]
-strategy = ret[~fest.target.isin(["west", "east"])]
-plots.cumulative_return({"половина улицы": honest.tolist(), "моя стратегия": strategy.tolist()})
+honest = ret[fest.target.isin(["west", "east"])].to_numpy()
+strategy = ret[~fest.target.isin(["west", "east"])].to_numpy()
+for label, r in [("половина улицы", honest), ("моя стратегия", strategy)]:
+    plt.plot(np.arange(1, len(r) + 1), np.cumsum(r) / np.arange(1, len(r) + 1), label=label)
+plt.axhline(1, color="k", ls="--", lw=1, label="рынок (1 монета за ящик)")
+plt.xlabel("число попыток n"); plt.ylabel("средняя выручка на ящик"); plt.legend()
 plt.show()
 """)
 

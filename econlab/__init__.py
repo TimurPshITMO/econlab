@@ -1,7 +1,11 @@
-"""Пакет для ЛР 3 «Экономика страны»: подключение к стенду, офлайн-режим, статистика, графики."""
-from . import plots, stats
+"""Пакет для работы со стендом «Экономика страны».
+
+    from econlab import City, MockCity, EconError
+
+City — ваш город на стенде, MockCity — офлайн-город с честными правилами для отладки,
+EconError — ошибка стенда. Подробности: help(City), help(MockCity).
+"""
 from .client import City, EconError
 from .mock import MockCity
-from .shuffle import simulate_neighbors
 
-__all__ = ["City", "MockCity", "EconError", "stats", "plots", "simulate_neighbors"]
+__all__ = ["City", "MockCity", "EconError"]
